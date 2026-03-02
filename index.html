@@ -918,72 +918,52 @@ footer::before { content: '桜'; position: absolute; right: -20px; top: -20px; f
 
 <script>
 /* ============================================================
-   GITHUB API — DATABASE ONLINE
-   Data disimpan di file db.json di repo GitHub
+   STORAGE — localStorage (token 001-999 sudah ada dari awal)
 ============================================================ */
-const GH_TOKEN = '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';
-const GH_REPO  = 'NihongYann/Bahasa-Jepang';
-const GH_FILE  = 'db.json';
-const GH_API   = `https://api.github.com/repos/${GH_REPO}/contents/${GH_FILE}`;
-
-let _cache    = null;
-let _cacheTime = 0;
-let _fileSha  = null;
-const CACHE_TTL = 8000;
-
-const DB_DEFAULT = {
-  tokens:{}, users:{}, counter:1,
-  dana:'', wa:'6285184619598',
-  blocked:{}, blockedTokens:{}
-};
-
-async function dbRead(){
-  const now = Date.now();
-  if(_cache && (now - _cacheTime) < CACHE_TTL) return JSON.parse(JSON.stringify(_cache));
-  try {
-    const res = await fetch(GH_API + '?t=' + now, {
-      headers:{ 'Authorization':'token ' + GH_TOKEN, 'Accept':'application/vnd.github.v3+json' }
-    });
-    if(res.status === 404){
-      // File belum ada → buat baru
-      _cache = JSON.parse(JSON.stringify(DB_DEFAULT));
-      _cacheTime = now;
-      await dbWrite(_cache);
-      return _cache;
-    }
-    const d = await res.json();
-    _fileSha = d.sha;
-    const decoded = JSON.parse(atob(d.content.replace(/\n/g,'')));
-    _cache = { ...DB_DEFAULT, ...decoded };
-    _cacheTime = now;
-    return JSON.parse(JSON.stringify(_cache));
-  } catch(e){
-    console.error('dbRead error', e);
-    return _cache ? JSON.parse(JSON.stringify(_cache)) : JSON.parse(JSON.stringify(DB_DEFAULT));
-  }
-}
-
-async function dbWrite(data){
-  _cache = JSON.parse(JSON.stringify(data));
-  _cacheTime = Date.now();
-  try {
-    const content = btoa(unescape(encodeURIComponent(JSON.stringify(data, null, 2))));
-    const body = { message:'update db', content, committer:{ name:'NihonGo VIP', email:'admin@nihongo.vip' } };
-    if(_fileSha) body.sha = _fileSha;
-    const res = await fetch(GH_API, {
-      method:'PUT',
-      headers:{ 'Authorization':'token ' + GH_TOKEN, 'Content-Type':'application/json', 'Accept':'application/vnd.github.v3+json' },
-      body: JSON.stringify(body)
-    });
-    const d = await res.json();
-    if(d.content) _fileSha = d.content.sha;
-  } catch(e){ console.error('dbWrite error', e); }
-}
-
-// localStorage hanya untuk progress belajar
 function vgs(k){ try{ return JSON.parse(localStorage.getItem(k)||'null'); }catch(e){ return null; } }
 function vss(k,v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
-const VK = { progress:'hd_progress' };
+const VK = {
+  tokens:'hd_tokens', users:'hd_users', progress:'hd_progress',
+  dana:'hd_dana', wa:'hd_wa', blocked:'hd_blocked', blockedTokens:'hd_blocked_tokens'
+};
+
+// Inisialisasi token 001-999 kalau belum ada
+(function initTokens(){
+  let tokens = vgs(VK.tokens);
+  if(!tokens){
+    tokens = {};
+    for(let i=1; i<=999; i++){
+      const k = String(i).padStart(3,'0');
+      tokens[k] = { used:false, username:null, locked:false };
+    }
+    vss(VK.tokens, tokens);
+  }
+})();
+
+function getTokens(){ return vgs(VK.tokens)||{}; }
+function getUsers(){  return vgs(VK.users)||{}; }
+function getBlocked(){ return vgs(VK.blocked)||{}; }
+function getBlockedTokens(){ return vgs(VK.blockedTokens)||{}; }
+
+// Wrapper async supaya kode admin tetap jalan
+async function dbRead(){
+  return {
+    tokens: getTokens(),
+    users:  getUsers(),
+    blocked: getBlocked(),
+    blockedTokens: getBlockedTokens(),
+    dana: vgs(VK.dana)||'',
+    wa:   vgs(VK.wa)||'6285184619598'
+  };
+}
+async function dbWrite(data){
+  if(data.tokens)       vss(VK.tokens, data.tokens);
+  if(data.users)        vss(VK.users,  data.users);
+  if(data.blocked)      vss(VK.blocked, data.blocked);
+  if(data.blockedTokens) vss(VK.blockedTokens, data.blockedTokens);
+  if(data.dana !== undefined) vss(VK.dana, data.dana);
+  if(data.wa   !== undefined) vss(VK.wa,   data.wa);
+}
 
 /* ============================================================
    DEBUG FUNCTION
@@ -1110,22 +1090,19 @@ async function doLogin(){
   const token=document.getElementById('li-token').value.trim();
   if(!username||!token){ showErr('err-masuk','Isi username dan token.'); return; }
   if(username==='Aqil Hayyan' && token==='Admin123'){ showScreen('s-admin'); refreshAdmin(); return; }
-  showToast('⏳ Memeriksa akun...');
   const ukey=username.toLowerCase();
-  const db=await dbRead();
-  const users=db.users||{};
+  const users=getUsers();
   if(!users[ukey]){ showErr('err-masuk','❌ Username tidak ditemukan.'); return; }
   const inputToken=token.replace(/\D/g,'').padStart(3,'0');
   if(users[ukey].token!==inputToken){ showErr('err-masuk','❌ Token tidak cocok.'); return; }
-  if((db.blocked||{})[ukey]){ showErr('err-masuk','⛔ Akun ini diblokir. Hubungi admin.'); return; }
-  const tokData=(db.tokens||{})[users[ukey].token];
-  if((db.blockedTokens||{})[users[ukey].token]||(tokData&&tokData.locked)){ showErr('err-masuk','🔑 Token diblokir. Hubungi admin.'); return; }
+  const blocked=getBlocked();
+  if(blocked[ukey]){ showErr('err-masuk','⛔ Akun diblokir. Hubungi admin.'); return; }
+  const tokens=getTokens(), blockedToks=getBlockedTokens();
+  const tok=users[ukey].token;
+  if(blockedToks[tok]||(tokens[tok]&&tokens[tok].locked)){ showErr('err-masuk','🔑 Token diblokir. Hubungi admin.'); return; }
   loginAs(ukey, users[ukey].name, users[ukey].token);
 }
 
-/* ============================================================
-   AUTH — REGISTER
-============================================================ */
 async function doRegister(){
   hideErr('err-daftar');
   const rawToken=document.getElementById('rg-token').value.trim();
@@ -1135,18 +1112,14 @@ async function doRegister(){
   if(!rawToken||!username||!name){ showErr('err-daftar','Isi semua kolom.'); return; }
   if(username.length<3){ showErr('err-daftar','Username minimal 3 karakter.'); return; }
   if(!/^\d{1,3}$/.test(rawToken)){ showErr('err-daftar','Token harus 1-3 digit angka.'); return; }
-  showToast('⏳ Memverifikasi token...');
-  const db=await dbRead();
-  const tokens=db.tokens||{};
-  const users=db.users||{};
-  if(!tokens[token]){ showErr('err-daftar','❌ Token tidak valid atau belum diterbitkan admin.'); return; }
-  if((db.blockedTokens||{})[token]||tokens[token].locked===true){ showErr('err-daftar','🔑 Token diblokir. Hubungi admin.'); return; }
+  const tokens=getTokens(), users=getUsers(), blockedToks=getBlockedTokens();
+  if(!tokens[token]){ showErr('err-daftar','❌ Token tidak valid. Pastikan angka benar.'); return; }
+  if(blockedToks[token]||tokens[token].locked===true){ showErr('err-daftar','🔑 Token diblokir. Hubungi admin.'); return; }
   if(tokens[token].used===true){ showErr('err-daftar','❌ Token sudah digunakan akun lain.'); return; }
   if(users[username]){ showErr('err-daftar','❌ Username sudah dipakai, coba yang lain.'); return; }
   tokens[token].used=true; tokens[token].username=username;
   users[username]={name,token};
-  db.tokens=tokens; db.users=users;
-  await dbWrite(db);
+  vss(VK.tokens,tokens); vss(VK.users,users);
   showToast('✅ Akun VIP berhasil dibuat! Silakan login.');
   switchLTab('masuk');
   document.getElementById('li-user').value=username;
@@ -1187,42 +1160,48 @@ function doAdminLogin(){
 }
 
 async function refreshAdmin(){
-  document.getElementById('mem-tbody').innerHTML='<tr><td colspan="5" style="text-align:center;color:var(--ink-muted);padding:16px;">⏳ Memuat data...</td></tr>';
   const db=await dbRead();
-  const tokens=db.tokens||{}, users=db.users||{}, ctr=db.counter||1;
+  const tokens=db.tokens||{}, users=db.users||{};
   const blocked=db.blocked||{}, blockedToks=db.blockedTokens||{};
 
-  document.getElementById('next-tok').textContent=String(ctr).padStart(3,'0');
+  // Statistik token
+  const allToks=Object.keys(tokens);
+  const available=allToks.filter(t=>!tokens[t].used&&!tokens[t].locked);
+  const used=allToks.filter(t=>tokens[t].used);
+  const locked=allToks.filter(t=>tokens[t].locked);
+  const nextEl=document.getElementById('next-tok');
+  if(nextEl) nextEl.textContent=available.length?available[0]:'Habis';
 
-  // Token list
-  const tl=document.getElementById('tok-list'), tk=Object.keys(tokens);
-  tl.innerHTML=tk.length ? tk.map(t=>{
-    const isLocked=!!blockedToks[t]||tokens[t].locked===true;
-    const statusTxt=isLocked
-      ? `<span style="font-size:9px;color:var(--fuji);">🔑 DIBLOKIR</span>`
-      : `<span class="ti-s ${tokens[t].used?'yes':'no'}">${tokens[t].used?'✓ Terpakai':'○ Tersedia'}</span>`;
-    return `<div class="tok-item" style="${isLocked?'opacity:.5;':''}"><span class="ti-t" style="${isLocked?'color:var(--fuji);':''}">${t}</span><span class="ti-u">${tokens[t].username||'Belum dipakai'}</span>${statusTxt}</div>`;
-  }).join('') : '<div style="font-size:12px;color:var(--ink-muted);text-align:center;padding:18px;">Belum ada token</div>';
+  // Token list — hanya tampilkan yg terpakai/terkunci
+  const tl=document.getElementById('tok-list');
+  const usedOrLocked=allToks.filter(t=>tokens[t].used||tokens[t].locked);
+  tl.innerHTML=`<div style="font-size:12px;color:var(--ink-muted);padding:10px 0 6px;letter-spacing:1px;">
+    ○ Tersedia: <strong>${available.length}</strong> &nbsp;|&nbsp; ✓ Terpakai: <strong>${used.length}</strong> &nbsp;|&nbsp; 🔑 Diblokir: <strong>${locked.length}</strong>
+  </div>`+(usedOrLocked.length?usedOrLocked.map(t=>{
+    const isLocked=tokens[t].locked===true||!!blockedToks[t];
+    const statusTxt=isLocked?`<span style="font-size:9px;color:var(--fuji);">🔑 DIBLOKIR</span>`:`<span class="ti-s yes">✓ Terpakai</span>`;
+    return `<div class="tok-item" style="${isLocked?'opacity:.5;':''}"><span class="ti-t" style="${isLocked?'color:var(--fuji);':''}">${t}</span><span class="ti-u">${tokens[t].username||'-'}</span>${statusTxt}</div>`;
+  }).join(''):'<div style="font-size:12px;color:var(--ink-muted);text-align:center;padding:18px;">Belum ada token terpakai</div>');
 
   // Member table
   const uk=Object.keys(users), tb=document.getElementById('mem-tbody'), mc=document.getElementById('member-count');
   if(mc) mc.textContent=uk.length?`(${uk.length} member)`:'';
-  tb.innerHTML=uk.length ? uk.map(u=>{
+  tb.innerHTML=uk.length?uk.map(u=>{
     const isMB=!!blocked[u], uTok=users[u].token;
     const isTB=!!blockedToks[uTok]||(tokens[uTok]&&tokens[uTok].locked===true);
     const isAny=isMB||isTB;
     let badge=isMB&&isTB?`<span class="badge-blocked">🔒 AKUN+TOKEN DIBLOKIR</span>`:isMB?`<span class="badge-blocked">🔒 AKUN DIBLOKIR</span>`:isTB?`<span class="badge-token-locked">🔑 TOKEN DIBLOKIR</span>`:`<span class="badge-vip">✓ VIP Aktif</span>`;
     let btns=isAny?`<button class="btn-tbl unblokir" onclick="bukaBlokir('${u}')">Buka Blokir</button><button class="btn-tbl hapus" onclick="hapusMember('${u}')">Hapus</button>`:`<button class="btn-tbl blokir" onclick="blokirMember('${u}')">Blokir</button><button class="btn-tbl hapus" onclick="hapusMember('${u}')">Hapus</button>`;
     return `<tr style="${isAny?'opacity:.55;':''}"><td style="font-family:'Noto Serif JP',serif;font-size:17px;letter-spacing:4px;color:${isTB?'var(--fuji)':'var(--sakura-dark)'}">${uTok}</td><td>${u}</td><td>${users[u].name}</td><td>${badge}</td><td class="aksi">${btns}</td></tr>`;
-  }).join('') : '<tr><td colspan="5" style="text-align:center;color:var(--ink-muted);padding:16px;">Belum ada member</td></tr>';
+  }).join(''):'<tr><td colspan="5" style="text-align:center;color:var(--ink-muted);padding:16px;">Belum ada member</td></tr>';
 
-  // Blocked tokens table
+  // Blocked tokens
   const btb=document.getElementById('blocked-tok-tbody'), btc=document.getElementById('blocked-tok-count'), btKeys=Object.keys(blockedToks);
   if(btc) btc.textContent=btKeys.length?`(${btKeys.length} token)`:'';
-  btb.innerHTML=btKeys.length ? btKeys.map(tok=>{
+  btb.innerHTML=btKeys.length?btKeys.map(tok=>{
     const info=blockedToks[tok], d=info.blockedAt?new Date(info.blockedAt).toLocaleDateString('id-ID'):'-';
     return `<tr><td style="font-family:'Noto Serif JP',serif;font-size:17px;letter-spacing:4px;color:var(--fuji);">${tok}</td><td>${info.username||'-'}</td><td>${info.name||'-'}</td><td><span class="badge-token-locked">🔑 Terkunci</span></td><td style="font-size:11px;color:var(--ink-muted);">${d}</td><td class="aksi"><button class="btn-tbl aktifkan" onclick="aktifkanToken('${tok}')">♻ Aktifkan Ulang</button></td></tr>`;
-  }).join('') : '<tr><td colspan="6" class="tok-blokir-empty">✅ Tidak ada token yang diblokir</td></tr>';
+  }).join(''):'<tr><td colspan="6" class="tok-blokir-empty">✅ Tidak ada token yang diblokir</td></tr>';
 
   // DANA & WA
   const dn=db.dana||''; const dEl=document.getElementById('adm-dana'); if(dEl) dEl.value=dn;
@@ -1231,21 +1210,13 @@ async function refreshAdmin(){
   const wel=document.getElementById('wa-num-display'); if(wa&&wel) wel.textContent='0'+wa.replace(/^62/,'');
 }
 
-async function generateToken(){
-  const db=await dbRead(); const ctr=db.counter||1;
-  if(ctr>999){showToast('Token habis!');return;}
-  const tn=String(ctr).padStart(3,'0');
-  if(!db.tokens) db.tokens={};
-  db.tokens[tn]={used:false,username:null,locked:false};
-  db.counter=ctr+1;
-  await dbWrite(db);
-  showToast(`✅ Token ${tn} berhasil dibuat!`); refreshAdmin();
-}
+// generateToken tidak dibutuhkan lagi — token 001-999 sudah ada semua
+function generateToken(){ showToast('Token 001-999 sudah tersedia semua!'); }
 
 async function saveDana(){
   const v=document.getElementById('adm-dana').value.trim();
   if(!v){showToast('Masukkan nomor DANA.');return;}
-  const db=await dbRead(); db.dana=v; await dbWrite(db);
+  vss(VK.dana,v);
   const el=document.getElementById('dana-num-display'); if(el) el.textContent=v;
   showToast('Nomor DANA disimpan!');
 }
@@ -1253,7 +1224,7 @@ async function saveDana(){
 async function saveWA(){
   const v=document.getElementById('adm-wa').value.trim().replace(/\D/g,'');
   if(!v){showToast('Masukkan nomor WA.');return;}
-  const db=await dbRead(); db.wa=v; await dbWrite(db);
+  vss(VK.wa,v);
   const el=document.getElementById('wa-num-display'); if(el) el.textContent='0'+v.replace(/^62/,'');
   showToast('Nomor WA disimpan!');
 }
@@ -1266,59 +1237,52 @@ async function resetData(){
 
 async function blokirMember(username){
   if(!confirm(`Blokir "${username}"?`)) return;
-  const db=await dbRead();
-  const uTok=db.users?.[username]?.token;
-  if(!db.blocked) db.blocked={};
-  db.blocked[username]=true;
+  const tokens=getTokens(), users=getUsers(), blocked=getBlocked(), blockedToks=getBlockedTokens();
+  const uTok=users[username]?.token;
+  blocked[username]=true; vss(VK.blocked,blocked);
   if(uTok){
-    if(!db.blockedTokens) db.blockedTokens={};
-    db.blockedTokens[uTok]={username,name:db.users[username]?.name||'-',blockedAt:Date.now()};
-    if(db.tokens?.[uTok]) db.tokens[uTok].locked=true;
+    blockedToks[uTok]={username,name:users[username]?.name||'-',blockedAt:Date.now()};
+    vss(VK.blockedTokens,blockedToks);
+    if(tokens[uTok]){ tokens[uTok].locked=true; vss(VK.tokens,tokens); }
   }
-  await dbWrite(db);
   showToast(`🔒 ${username} diblokir!`); refreshAdmin();
 }
 
 async function bukaBlokir(username){
   if(!confirm(`Buka blokir "${username}"?`)) return;
-  const db=await dbRead();
-  const uTok=db.users?.[username]?.token;
-  if(db.blocked) delete db.blocked[username];
+  const tokens=getTokens(), users=getUsers(), blocked=getBlocked(), blockedToks=getBlockedTokens();
+  const uTok=users[username]?.token;
+  delete blocked[username]; vss(VK.blocked,blocked);
   if(uTok){
-    if(db.blockedTokens) delete db.blockedTokens[uTok];
-    if(db.tokens?.[uTok]) db.tokens[uTok].locked=false;
+    delete blockedToks[uTok]; vss(VK.blockedTokens,blockedToks);
+    if(tokens[uTok]){ tokens[uTok].locked=false; vss(VK.tokens,tokens); }
   }
-  await dbWrite(db);
   showToast(`✅ Blokir ${username} dibuka!`); refreshAdmin();
 }
 
 async function aktifkanToken(tok){
-  const db=await dbRead();
-  const info=(db.blockedTokens||{})[tok]||{};
+  const blockedToks=getBlockedTokens(), info=blockedToks[tok]||{};
   if(!confirm(`Aktifkan ulang token ${tok}?\nAkun lama "${info.username||'-'}" akan dihapus.`)) return;
-  if(info.username&&db.users?.[info.username]){
-    delete db.users[info.username];
-    if(db.blocked) delete db.blocked[info.username];
-    if(db.progress) delete db.progress[info.username];
+  const tokens=getTokens(), users=getUsers(), blocked=getBlocked();
+  if(info.username&&users[info.username]){
+    delete users[info.username]; vss(VK.users,users);
+    delete blocked[info.username]; vss(VK.blocked,blocked);
   }
-  if(!db.tokens) db.tokens={};
-  if(!db.tokens[tok]) db.tokens[tok]={};
-  db.tokens[tok].used=false; db.tokens[tok].username=null; db.tokens[tok].locked=false;
-  if(db.blockedTokens) delete db.blockedTokens[tok];
-  await dbWrite(db);
+  if(!tokens[tok]) tokens[tok]={};
+  tokens[tok].used=false; tokens[tok].username=null; tokens[tok].locked=false;
+  vss(VK.tokens,tokens);
+  delete blockedToks[tok]; vss(VK.blockedTokens,blockedToks);
   showToast(`♻️ Token ${tok} aktif kembali!`); refreshAdmin();
 }
 
 async function hapusMember(username){
   if(!confirm(`HAPUS akun "${username}" permanen?`)) return;
-  const db=await dbRead();
-  const uTok=db.users?.[username]?.token;
-  if(uTok&&db.tokens?.[uTok]){ db.tokens[uTok].used=false; db.tokens[uTok].username=null; db.tokens[uTok].locked=false; }
-  if(uTok&&db.blockedTokens?.[uTok]) delete db.blockedTokens[uTok];
-  if(db.users) delete db.users[username];
-  if(db.blocked) delete db.blocked[username];
-  if(db.progress) delete db.progress[username];
-  await dbWrite(db);
+  const tokens=getTokens(), users=getUsers(), blocked=getBlocked(), blockedToks=getBlockedTokens();
+  const uTok=users[username]?.token;
+  if(uTok&&tokens[uTok]){ tokens[uTok].used=false; tokens[uTok].username=null; tokens[uTok].locked=false; vss(VK.tokens,tokens); }
+  if(uTok&&blockedToks[uTok]){ delete blockedToks[uTok]; vss(VK.blockedTokens,blockedToks); }
+  delete users[username]; delete blocked[username];
+  vss(VK.users,users); vss(VK.blocked,blocked);
   showToast(`🗑️ Akun ${username} dihapus!`); refreshAdmin();
 }
 
